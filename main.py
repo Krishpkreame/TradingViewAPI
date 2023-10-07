@@ -42,4 +42,4 @@ def stop_market(tvsymbol):
 
 if __name__ == '__main__':
     tvapi = tv.API()
-    app.run(threaded=True)
+    app.run(host="0.0.0.0", port=5000, threaded=True)

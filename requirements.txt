@@ -1,3 +1,4 @@
 selenium
 flask
 pymysql
+cryptography

@@ -118,7 +118,7 @@ class API:
                 self.raw_rsi_value = self.tv_market_data[__tvsymbol]["instance"].find_element(
                     By.XPATH, '//div[@data-name="legend-source-item"]').text.split("\n")[2]
                 self.raw_price_price = self.tv_market_data[__tvsymbol]["instance"].find_element(
-                    By.XPATH, '//div[@data-name="legend-series-item"]').text.split("\n")[-1]
+                    By.XPATH, '//div[@data-name="legend-series-item"]').text
 
                 # Format and filter raw time string into datetime
                 self.time_step1 = self.raw_time.split(" ")[0]

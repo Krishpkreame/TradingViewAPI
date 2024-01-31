@@ -4,6 +4,8 @@ from selenium.common.exceptions import InvalidSessionIdException  # For Selenium
 
 app = Flask(__name__)  # Initialize Flask app
 
+tvapi = tv.API()  # Initialize TradingView API
+
 
 # API start point for each market
 @app.route('/<tvsymbol>/start')
@@ -48,10 +50,3 @@ def stop_market(tvsymbol):
         return jsonify({'error': str(e)}), 500
     # Return success message if market stopped
     return jsonify({'response': result}), 200
-
-
-# Run file
-if __name__ == '__main__':
-    tvapi = tv.API()  # Initialize TradingView API
-    # Run Flask app, network accessable, port 5000, multi-threaded
-    app.run(host="0.0.0.0", port=5000, threaded=True)

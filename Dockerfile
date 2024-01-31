@@ -12,9 +12,7 @@ EXPOSE 5000
 
 # Add required environment variables
 
-# ENV SELENIUM_URL 
-# ENV CMC_USERNAME 
-# ENV CMC_PASSWORD 
+# ENV SELENIUM_URL
 # ENV MYSQL_DB1_JSON_CONN 
 
 

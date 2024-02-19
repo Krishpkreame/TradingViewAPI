@@ -1,194 +1,267 @@
-# Environment variables and datetime and regex
 import os
 import re
 from datetime import datetime
-# For web scraping
+import time
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.common.exceptions import InvalidSessionIdException
-# For waiting for web elements to load instead of time
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-# For MySQL database
-import json
-import pymysql
+import selenium.common.exceptions as sel_exc
+import pymongo
 
 
 class API:
     # Initialize class variables and environment variables
     def __init__(self):
-        # Get DB info from environment variable
-        self.dbconf = json.loads(os.environ.get("MYSQL_DB1_JSON_CONN", ""))
-        # Set up flags for services, first connect to database
-        self.connection = pymysql.connect(
-            host=self.dbconf["host"],
-            user=self.dbconf["user"],
-            password=self.dbconf["password"],
-            db=self.dbconf["database"],
-            charset='utf8mb4',
-            cursorclass=pymysql.cursors.DictCursor)
-        # Get symbol names from database
-        with self.connection.cursor() as cursor:
-            _sql = f"SELECT * FROM `input_info`"
-            cursor.execute(_sql)
-            # Set up flags for services of each market
-            self.tv_market_data = {
-                row['tv_symbol']: {
-                    'status': False,
-                    'link': row['tv_link'],
-                    'instance': None
-                } for row in cursor}
-        # Close the temp connection
-        self.connection.close()
+        """
+        Initializes an instance of the TradingViewAPI class.
 
-        # Get Selenium URL from environment variable
-        self.selenium_url = os.environ.get("SELENIUM_URL", "")
-        # Set up Selenium options
+        The __init__ method sets up the necessary configurations and connections for the TradingViewAPI class.
+
+        Parameters:
+            None
+
+        Returns:
+            None
+        """
+        # Get mongodb connection string if set, otherwise assume local
+        self.conn_str = os.environ.get(
+            "DB_CONN_STR",
+            "mongodb://user:password@localhost:27017/")
+        # Get selenium url if set, otherwise assume local
+        self.selenium_url = os.environ.get(
+            "SELENIUM_URL", "http://localhost:4444/wd/hub")
+
+        # Initialize browser options
         self.browser_options = webdriver.ChromeOptions()
         self.browser_options.add_argument("--start-maximized")
 
-    # Start market service for symbol
+        # Initialize MongoDB client
+        self.mydb = pymongo.MongoClient(self.conn_str)["cmc_db"]
+        # Initialize Mongo collections
+        self.info_data = self.mydb["info"]
+
+        # Set up flags for services of each market
+        self.session_flags = {
+            row['tv_symbol']: {
+                'status': False,
+                'keyword': row['cmc_keyword'],
+                'link': row['tv_link'],
+                'instance': None
+            } for row in self.info_data.find()}
+
+    def find(self, __tvsymbol, xpath, multiple=False):
+        """
+        Find element(s) using XPath in the TradingView session.
+
+        Parameters:
+        __tvsymbol (str): The symbol of the TradingView session.
+        xpath (str): The XPath expression to locate the element(s).
+        multiple (bool, optional): If True, returns a list of elements. If False, returns a single element. Default is False.
+
+        Returns:
+        WebElement or list: The found element(s) or an empty list if no element is found.
+        """
+        if multiple:
+            return self.session_flags[__tvsymbol]["instance"].find_elements(By.XPATH, xpath)
+        else:
+            return self.session_flags[__tvsymbol]["instance"].find_element(By.XPATH, xpath)
+
     def start_market_service(self, __tvsymbol):
+        """
+        Starts the market service for the given symbol.
+
+        Args:
+            __tvsymbol (str): The symbol for which to start the market service.
+
+        Returns:
+            dict: A dictionary containing the success status, message, symbol, and session ID.
+        """
+        # Check if the given TV symbol is in the database
+        if __tvsymbol not in self.session_flags:
+            return {
+                "success": False,
+                "message": f"{__tvsymbol} not found in database",
+                "symbol": __tvsymbol}
+
+        # Check if the market service for the given TV symbol is already started
+        if self.session_flags[__tvsymbol]['status']:
+            return {
+                "success": False,
+                "message": f"{__tvsymbol} already started",
+                "symbol": __tvsymbol}
+
         try:
-            # Check if symbol is not supported, raise error
-            if __tvsymbol not in self.tv_market_data:
-                raise Exception(
-                    f"TradingView {__tvsymbol} is not supported. (start)")
+            # Check if the Selenium session is still active by trying to find the time zone menu button
+            self.find(
+                __tvsymbol,
+                '//button[@data-name="time-zone-menu"]'
+            )
+        except sel_exc.InvalidSessionIdException:
+            print("Selenium session timed out.\n Creating new session...")
+            # If the session is not active, restart the session
+            self.session_flags[__tvsymbol]["status"] = False
+            self.session_flags[__tvsymbol]["instance"] = None
+        except AttributeError:
+            print("Selenium session not created.\n Creating new session...")
 
-            # Check if flagged symbol is running and not timed out.
-            try:
-                # Check timezone button to see if session is timed out
-                self.tv_market_data[__tvsymbol]["instance"].find_element(
-                    By.XPATH, '//button[@data-name="time-zone-menu"]').text
-            # If session doesnt exsit, continue starting the service
-            except AttributeError as e:
-                pass
-            # If session is timed out, restart the flags, continue starting the service
-            except InvalidSessionIdException as e:
-                self.tv_market_data[__tvsymbol]["status"] = False
-                self.tv_market_data[__tvsymbol]["instance"] = None
+        # Create a new Selenium session
+        self.session_flags[__tvsymbol]["instance"] = webdriver.Remote(
+            command_executor=self.selenium_url,
+            options=self.browser_options)
 
-            # Check if flagged symbol is not running, start the service
-            if not self.tv_market_data[__tvsymbol]["status"]:
-                # Change status to running
-                self.tv_market_data[__tvsymbol]["status"] = True
-                # Start selenium browser with needed options
-                self.tv_market_data[__tvsymbol]["instance"] = webdriver.Remote(
-                    command_executor=self.selenium_url,
-                    options=self.browser_options)
-                # Go to TradingView link for each symbol
-                self.tv_market_data[__tvsymbol]["instance"].get(
-                    self.tv_market_data[__tvsymbol]["link"])
-                # Wait for Page to load
-                WebDriverWait(self.tv_market_data[__tvsymbol]["instance"], 20).until(
-                    EC.presence_of_element_located((By.XPATH, '//div[@data-name="legend-source-item"]')))
-                self.tv_market_data[__tvsymbol]["instance"].implicitly_wait(1)
+        # Open the TradingView link for the given TV symbol
+        self.session_flags[__tvsymbol]["instance"].get(
+            self.session_flags[__tvsymbol]["link"])
+        # Wait for the page to load
+        time.sleep(5)
 
-                # Get session id for flagged symbol
-                temp_sessionid = str(
-                    self.tv_market_data[__tvsymbol]["instance"].session_id)
-                # Return success message
-                return f"{__tvsymbol} service started. {temp_sessionid}"
-            # If flagged symbol is running, raise error
-            else:
-                # Get session id for flagged symbol
-                temp_sessionid = str(
-                    self.tv_market_data[__tvsymbol]["instance"].session_id)
-                raise Exception(
-                    f"TradingView {__tvsymbol} service is already running. {temp_sessionid}")
-        # For redundant error handling, if anything happens, reset flags and raise error
-        except InvalidSessionIdException as e:
-            self.tv_market_data[__tvsymbol]["status"] = False
-            self.tv_market_data[__tvsymbol]["instance"] = None
-            raise InvalidSessionIdException(e)
+        # Set the flag for the market service to True
+        self.session_flags[__tvsymbol]["status"] = True
 
-    # Get rsi value for symbol
-    def get_rsi(self, __tvsymbol):
-        try:
-            # Check if symbol is not supported, raise error
-            if __tvsymbol not in self.tv_market_data:
-                raise Exception(
-                    f"TradingView {__tvsymbol} is not supported. (get rsi)")
+        # Return the success status, message, symbol, and session ID
+        return {
+            "success": True,
+            "message": f"{__tvsymbol} service started",
+            "symbol": __tvsymbol,
+            "session_id": self.session_flags[__tvsymbol]["instance"].session_id,
+        }
 
-            # Check if flagged symbol is running
-            if self.tv_market_data[__tvsymbol]["status"]:
-                # Get raw string value of time, rsi, price from TradingView
-                self.raw_time = self.tv_market_data[__tvsymbol]["instance"].find_element(
-                    By.XPATH, '//button[@data-name="time-zone-menu"]').text.split("\n")[-1]
-                self.raw_rsi_value = self.tv_market_data[__tvsymbol]["instance"].find_element(
-                    By.XPATH, '//div[@data-name="legend-source-item"]').text.split("\n")[2]
-                self.raw_price_price = self.tv_market_data[__tvsymbol]["instance"].find_element(
-                    By.XPATH, '//div[@data-name="legend-series-item"]').text
-
-                # Format and filter raw time string into datetime
-                self.time_step1 = self.raw_time.split(" ")[0]
-                self.time_step2 = datetime.strptime(
-                    self.time_step1, "%H:%M:%S").time()
-                self.datetime_value = str(datetime.combine(
-                    datetime.now().date(), self.time_step2))
-
-                # Format and filter raw rsi string into float
-                self.rsi_value = float(self.raw_rsi_value)
-
-                # Format and filter raw price string into dict using regex
-                self.price_step1 = [
-                    float(value) for value in re.findall(
-                        '\d+\.\d+', self.raw_price_price)][0:4]
-                self.price_values = {
-                    "open": self.price_step1[0],
-                    "high": self.price_step1[1],
-                    "low": self.price_step1[2],
-                    "close": self.price_step1[3]}
-
-                # Get session id for flagged symbol
-                temp_sessionid = str(
-                    self.tv_market_data[__tvsymbol]["instance"].session_id)
-
-                # Return values
-                return {
-                    "rsi": self.rsi_value,
-                    "datetime": self.datetime_value,
-                    "tv_symbol": __tvsymbol,
-                    "price": self.price_values,
-                    "sessionid": temp_sessionid
-                }
-            # If flagged symbol is not running, raise error
-            else:
-                raise Exception(
-                    f"TradingView {__tvsymbol} service is not running, can not get rsi.")
-        # If session is timed out, reset flags, raise error
-        except InvalidSessionIdException as e:
-            self.tv_market_data[__tvsymbol]["status"] = False
-            self.tv_market_data[__tvsymbol]["instance"] = None
-            raise InvalidSessionIdException(e)
-
-    # Stop market service for symbol
     def stop_market_service(self, __tvsymbol):
+        """
+        Stop the market service for the given TV symbol.
+
+        Args:
+            __tvsymbol (str): The TV symbol for which to stop the market service.
+
+        Returns:
+            dict: A dictionary containing the success status, message, and symbol.
+        """
+        # Check if the given TV symbol is in the database
+        if __tvsymbol not in self.session_flags:
+            return {
+                "success": False,
+                "message": f"{__tvsymbol} not found in database",
+                "symbol": __tvsymbol}
+
+        # Check if the market service for the given TV symbol is already stopped
+        if not self.session_flags[__tvsymbol]['status']:
+            return {
+                "success": False,
+                "message": f"{__tvsymbol} already stopped",
+                "symbol": __tvsymbol}
+
         try:
-            # Check if symbol is not supported, raise error
-            if __tvsymbol not in self.tv_market_data:
-                raise Exception(
-                    f"TradingView {__tvsymbol} is not supported. (stop)")
+            # Check if the Selenium session is active
+            self.find(
+                __tvsymbol,
+                '//button[@data-name="time-zone-menu"]'
+            )
+        except sel_exc.InvalidSessionIdException:
+            print("Selenium session timed out.")
+            self.session_flags[__tvsymbol]["status"] = False
+            self.session_flags[__tvsymbol]["instance"] = None
+            return {
+                "success": True,
+                "message": f"{__tvsymbol} service timed out",
+                "symbol": __tvsymbol}
 
-            # Check if flagged symbol is running
-            if self.tv_market_data[__tvsymbol]["status"]:
-                # Get session id for flagged symbol (before quitting)
-                temp_sessionid = str(
-                    self.tv_market_data[__tvsymbol]["instance"].session_id)
+        # Close the Selenium session
+        self.session_flags[__tvsymbol]["instance"].quit()
 
-                # Quit selenium and reset flags
-                self.tv_market_data[__tvsymbol]["instance"].quit()
-                self.tv_market_data[__tvsymbol]["status"] = False
-                self.tv_market_data[__tvsymbol]["instance"] = None
+        # Set the flag for the market service to False
+        self.session_flags[__tvsymbol]["status"] = False
 
-                # Return success message
-                return f"{__tvsymbol} service stopped. {temp_sessionid}"
-            # If flagged symbol is not running, raise error
-            else:
-                raise Exception(
-                    f"TradingView {__tvsymbol} service is not running.")
-        # If session is timed out, reset flags, raise error
-        except InvalidSessionIdException as e:
-            self.tv_market_data[__tvsymbol]["status"] = False
-            self.tv_market_data[__tvsymbol]["instance"] = None
-            raise InvalidSessionIdException(e)
+        # Return the success status, message, and symbol
+        return {
+            "success": True,
+            "message": f"{__tvsymbol} service stopped",
+            "symbol": __tvsymbol,
+        }
+
+    def get_rsi(self, __tvsymbol):
+        """
+        Get the RSI (Relative Strength Index) values for a given TradingView symbol.
+
+        Args:
+            __tvsymbol (str): The TradingView symbol for which to fetch the RSI values.
+
+        Returns:
+            dict: A dictionary containing the success status, message, symbol, RSI values, and prices.
+                - success (bool): True if the RSI values were fetched successfully, False otherwise.
+                - message (str): A message indicating the status of the RSI fetch operation.
+                - datetime (str): The current date and time in the format "%Y-%m-%d %H:%M:%S".
+                - symbol (str): The TradingView symbol for which the RSI values were fetched.
+                - rsi (float): The RSI value.
+                - rsi_ma (float): The Moving Average of the RSI value.
+                - prices (dict): A dictionary containing the open, high, low, and close prices.
+                    - open (float): The open price.
+                    - high (float): The high price.
+                    - low (float): The low price.
+                    - close (float): The close price.
+        """
+        # Check if the given TV symbol is in the database
+        if __tvsymbol not in self.session_flags:
+            return {
+                "success": False,
+                "message": f"{__tvsymbol} not found in database",
+                "symbol": __tvsymbol}
+
+        # Check if the market service for the given TV symbol is already started
+        if not self.session_flags[__tvsymbol]['status']:
+            return {
+                "success": False,
+                "message": f"{__tvsymbol} not running",
+                "symbol": __tvsymbol}
+
+        try:
+            # Check if the Selenium session is still active by trying to find the time zone menu button
+            self.find(
+                __tvsymbol,
+                '//button[@data-name="time-zone-menu"]'
+            )
+        except sel_exc.InvalidSessionIdException:
+            print("Selenium session timed out.\n Creating new session...")
+            # If the session is not active, restart the session
+            self.session_flags[__tvsymbol]["status"] = False
+            self.session_flags[__tvsymbol]["instance"] = None
+            self.start_market_service(__tvsymbol)
+
+        print("Getting RSI...")
+
+        # Get the raw prices values from the TradingView session
+        self.raw_prices = self.find(
+            __tvsymbol,
+            '//div[@data-name="legend-series-item"]').text
+
+        # Format the raw prices values in open, high, low, close float values
+        self.prices = [float(value) for value in re.findall(
+            '\d+\.\d+', self.raw_prices) if float(value) > 10]
+
+        # Get the RSI value from the TradingView session
+        self.raw_rsi = self.find(
+            __tvsymbol,
+            '//div[@data-name="legend-source-item"]',
+            multiple=True)
+
+        # Filter the list for elements that contain the 'RSI' words
+        self.raw_rsis = [e for e in self.raw_rsi if 'RSI' in e.text][0].text
+
+        # Extract the RSI values (RSI and Moving Avg) from text
+        self.rsi_values = [float(value) for value in re.findall(
+            '\d+\.\d+', self.raw_rsis)]
+
+        # Return the success status, message, symbol, RSI values, and prices
+        return {
+            "success": True,
+            "message": f"RSI for {__tvsymbol} fetched",
+            "datetime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "symbol": __tvsymbol,
+            "rsi": self.rsi_values[0],
+            "rsi_ma": self.rsi_values[1],
+            "prices":
+                {
+                "open": self.prices[0],
+                "high": self.prices[1],
+                "low": self.prices[2],
+                "close": self.prices[3]
+            }
+        }

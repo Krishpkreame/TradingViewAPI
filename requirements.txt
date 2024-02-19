@@ -1,4 +1,3 @@
 selenium
 flask
-pymysql
-cryptography
+pymongo

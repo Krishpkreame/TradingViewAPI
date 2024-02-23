@@ -1,4 +1,3 @@
-import os
 import re
 from datetime import datetime
 import time
@@ -6,11 +5,12 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 import selenium.common.exceptions as sel_exc
 import pymongo
+import urllib.parse
 
 
 class API:
     # Initialize class variables and environment variables
-    def __init__(self):
+    def __init__(self, conn_str, selenium_url):
         """
         Initializes an instance of the TradingViewAPI class.
 
@@ -22,31 +22,60 @@ class API:
         Returns:
             None
         """
-        # Get mongodb connection string if set, otherwise assume local
-        self.conn_str = os.environ.get(
-            "DB_CONN_STR",
-            "mongodb://user:password@localhost:27017/")
-        # Get selenium url if set, otherwise assume local
-        self.selenium_url = os.environ.get(
-            "SELENIUM_URL", "http://localhost:4444/wd/hub")
-
+        # Initialize environment variables
+        self.conn_str = conn_str
+        self.selenium_url = selenium_url
+        
         # Initialize browser options
         self.browser_options = webdriver.ChromeOptions()
         self.browser_options.add_argument("--start-maximized")
 
-        # Initialize MongoDB client
-        self.mydb = pymongo.MongoClient(self.conn_str)["cmc_db"]
+        # Initialize MongoDB client, max retries
+        for attempt in range(1,4):
+            try:
+                self.mydb = pymongo.MongoClient(self.conn_str)["app"]
+                print("MongoDB server connected.")
+                break
+            except pymongo.errors.ServerSelectionTimeoutError:
+                print(f"MongoDB server not available. Retrying... (Attempt {attempt})")
+                time.sleep(10)
+        
         # Initialize Mongo collections
-        self.info_data = self.mydb["info"]
+        self.info_data = self.mydb["tvapi_info"]
 
         # Set up flags for services of each market
         self.session_flags = {
             row['tv_symbol']: {
                 'status': False,
-                'keyword': row['cmc_keyword'],
-                'link': row['tv_link'],
+                'link': "",
                 'instance': None
             } for row in self.info_data.find()}
+
+        # Set up the TradingView links for each market
+        self.base_tv_url = "https://s.tradingview.com/embed-widget/advanced-chart/?locale=en#"
+        for symbol in self.session_flags:
+            self.temp_symbol_url = self.base_tv_url + urllib.parse.quote(
+                f"""
+                \x7B
+                    "autosize": true,
+                    "symbol": "{symbol}",
+                    "interval": "D",
+                    "timezone": "Etc/UTC",
+                    "theme": "light",
+                    "style": "1",
+                    "locale": "en",
+                    "enable_publishing": false,
+                    "hide_top_toolbar": true,
+                    "withdateranges": true,
+                    "save_image": false,
+                    "calendar": false,
+                    "studies": ["STD;RSI"],
+                    "hide_volume": true,
+                    "support_host": "https://www.tradingview.com"
+                \x7D
+                """, encoding="utf-8")
+            self.session_flags[symbol]["link"] = self.temp_symbol_url
+        print(self.session_flags)#!
 
     def find(self, __tvsymbol, xpath, multiple=False):
         """

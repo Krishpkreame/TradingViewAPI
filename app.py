@@ -1,9 +1,21 @@
 from flask import Flask, jsonify
 import tradingview as tv
+import os
 
+# Get mongodb connection string if set, otherwise assume docker network
+conn_str = os.environ.get(
+    "DB_CONN_STR",
+    "mongodb://user:password@mongodb:27017/")
+
+# Get selenium url if set, otherwise assume docker network
+selenium_url = os.environ.get(
+    "SELENIUM_URL", "http://selenium:4444/wd/hub")
+
+# Create a Flask app
 app = Flask(__name__)
 
-tvapi = tv.API()
+# Create a TradingView API instance with the connection string and selenium url
+tvapi = tv.API(conn_str, selenium_url)
 
 
 @app.route('/<tvsymbol>/start')

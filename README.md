@@ -30,13 +30,31 @@ Refer to the comments in `app.py` for detailed information on each endpoint.
 
 The provided Dockerfile allows you to containerize the TradingView Metrics Collector. Adjust the environment variables during `docker run` for customization.
 
-Setup `DB_CONN_STR` for a mongo database you have it hosted or if hosting locally you can skip this step.
-- Just ensure you add a user with name `user` and password `password`, mongodb will create the database and collections, and using TradingViews widget system you can add your own links and symbols.
+## Adding Symbols
 
-Setup `SELENIUM_URL` for a Selenium Grid container you have it hosted, or if you are hosting it locally you can skip this too
+Adding new markets to this API works very simply, just add a new entry into mongodb at `app/tvapi_info` with the template:
+
+```json
+{
+  // Format EXCHANGE:SYMBOL
+  "tv_symbol": "EIGHTCAP:ASX200"
+}
+```
+
+- Find the TradingView symbols [here](https://www.tradingview.com/symbol).
+
+# Enviroment Variables
+
+Setup `DB_CONN_STR` for a mongo database you have it hosted
+
+- Just ensure you add a user with name `user` and password `password`
+
+Setup `SELENIUM_URL` for a Selenium Grid container you have it hosted
+
+- Ensure there is enough shared memory and max sessions allowed
+
 ## Contributing
 
 Contributions are welcome! Improving the code, adding your own features or remaking for differnt platform or database you be amazing to see.
 
 Please follow the standard GitHub fork and pull request workflow.
-
